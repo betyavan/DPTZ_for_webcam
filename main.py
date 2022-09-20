@@ -8,18 +8,46 @@ class Point:
         self.y = y
 
 
-def is_same_centers(c1: Point, c2: Point, threshold=50) -> bool:
-    return abs(c1.x - c2.x) <= threshold and abs(c1.y - c2.y) <= threshold
-
-
 def get_distance(p1: Point, p2: Point) -> float:
     return sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
+
+
+class Face:
+    def __init__(self, description=(0, 0, 0, 0)):
+        """
+        :param description: (x, y, h, w)
+        """
+        x, y, h, w = description
+        self.h_half = h // 2
+        self.w_half = w // 2
+        self.center = Point(x + self.w_half, y + self.h_half)
+
+
+def is_same_faces(face: Face, center_face: Face, half_h, half_w, alpha=1) -> bool:
+    """
+    center_face is in center of frame={height, width}
+    faces are the same if the second in rectangle={alpha*height, alpha*width}
+    """
+    x_difference = abs(face.center.x - center_face.center.x)
+    y_difference = abs(face.center.y - center_face.center.y)
+    return x_difference <= alpha * half_w and y_difference <= alpha * half_h
+
+
+def get_move_vector(face1: Face, face2: Face) -> (int, int):
+    move_x = 4
+    move_y = 2
+    dx = face2.center.x - face1.center.x
+    dy = face2.center.y - face1.center.y
+
+    step_x = move_x if dx > 0 else -move_x
+    step_y = move_y if dy > 0 else -move_y
+
+    return step_x, step_y
 
 
 def get_clipped_segment(center, half_len, up_bound) -> (int, int):
     """
     :return: segment between 0 and up_bound
-
     """
     start = max(0, center - half_len)
     end = min(up_bound, center + half_len)
@@ -31,17 +59,17 @@ def get_clipped_segment(center, half_len, up_bound) -> (int, int):
     return start, end
 
 
-def get_nearest_face(faces: list, prev_center: Point) -> Point:
+def get_nearest_face(faces: list, prev_face: Face) -> Face:
     """
     :param faces: a list of faces whose description is like (x, y, h, w)
-    :param prev_center: center point of previous shot's face
+    :param prev_face: previous shot's face
     :return: center point of the nearest face to previous
     """
-    # (x, y, h, w) -> (c_x, c_y)
-    centers = list(map(lambda x: Point(x[0] + x[-1] // 2, x[1] + x[2] // 2), faces))
-    # sort by the nearest
-    centers.sort(key=lambda x: get_distance(x, prev_center))
-    return centers[0]
+    # (x, y, h, w) -> Face object
+    faces = list(map(lambda x: Face(x), faces))
+    # sort by the nearest to prev_face
+    faces.sort(key=lambda x: get_distance(x.center, prev_face.center))
+    return faces[0]
 
 
 class DBroadcaster:
@@ -62,10 +90,15 @@ class DBroadcaster:
             self.frame_h_half = self.frame_h // 2
             self.frame_w_half = int(proportions[-1] * ratio) // 2
 
-        self.prev_c = Point(0, 0)  # center of face
+        self.prev_face = Face()  # center of face
         # extreme frame points
         self.prev_left_top = Point(0, 0)
         self.prev_right_bottom = Point(self.win_w, self.win_h)
+
+        self.move_cam = False
+        self.num_iter_step = 0
+        self.prev_dx = 0
+        self.prev_dy = 0
 
     def broadcast_crop_video(self):
         """
@@ -73,6 +106,7 @@ class DBroadcaster:
         """
         while True:
             ret, img = self.cap.read()
+            img = img[:, ::-1]
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
             left_top, right_bottom = self.get_new_frame_points(faces, self.prev_left_top, self.prev_right_bottom)
@@ -90,18 +124,26 @@ class DBroadcaster:
         evaluate new frame coordinates
         """
         if self.proportions is not None and len(faces) != 0:
-            center = get_nearest_face(faces, self.prev_c)
-            if is_same_centers(center, self.prev_c):
+            face = get_nearest_face(faces, self.prev_face)
+            alpha = 0.3 if self.move_cam else 0.6
+
+            if is_same_faces(face, self.prev_face, self.frame_h_half, self.frame_w_half, alpha):
+                self.move_cam = False
                 left_top = prev_left_top
                 right_bottom = prev_right_bottom
             else:
-                top, bottom = get_clipped_segment(center.y, self.frame_h_half, self.win_h)
-                left, right = get_clipped_segment(center.x, self.frame_w_half, self.win_w)
+                if self.prev_face.center.x != 0 and self.prev_face.center.y != 0:
+                    dx, dy = self.move_center(face)
+                    face.center.x = self.prev_face.center.x + dx
+                    face.center.y = self.prev_face.center.y + dy
+
+                top, bottom = get_clipped_segment(face.center.y, self.frame_h_half, self.win_h)
+                left, right = get_clipped_segment(face.center.x, self.frame_w_half, self.win_w)
 
                 left_top = Point(left, top)
                 right_bottom = Point(right, bottom)
 
-                self.prev_c = center
+                self.prev_face = face
                 self.prev_left_top = left_top
                 self.prev_right_bottom = right_bottom
 
@@ -111,15 +153,27 @@ class DBroadcaster:
 
         return left_top, right_bottom
 
+    def move_center(self, face):
+        if self.move_cam and self.num_iter_step < 30:
+            self.num_iter_step += 1
+            dx, dy = self.prev_dx, self.prev_dy
+        else:
+            self.move_cam = True
+            self.num_iter_step = 0
+            dx, dy = get_move_vector(self.prev_face, face)
+            self.prev_dx, self.prev_dy = dx, dy
 
-user_input = input("proportions (if they don't needs - use '-'): ")
-if user_input == '-':
-    props = None
-else:
-    props = list(map(int, user_input.split()))
-    assert len(props) == 2, "proportions have only 2 arguments :0\n"
+        return dx, dy
+
+
+# user_input = input("proportions (if they don't needs - use '-'): ")
+# if user_input == '-':
+#     props = None
+# else:
+#     props = list(map(int, user_input.split()))
+#     assert len(props) == 2, "proportions have only 2 arguments :0\n"
 
 print("please wait...")
-streamer = DBroadcaster(0, props, 0.7)
+streamer = DBroadcaster(0, (3, 4), 0.7)
 streamer.broadcast_crop_video()
 print(":)")
