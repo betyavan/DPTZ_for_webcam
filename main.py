@@ -1,5 +1,6 @@
 import cv2
 from math import sqrt
+from rtsp_streaming import Streamer
 
 
 class Point:
@@ -79,9 +80,9 @@ class DBroadcaster:
         self.face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
         self.cap = cv2.VideoCapture(id_cam)
 
-        ret, img = self.cap.read()
         # window dimensions
-        self.win_h, self.win_w = img.shape[:2]
+        self.win_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.win_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 
         # evaluate frame dimensions
         if self.proportions is not None:
@@ -89,6 +90,11 @@ class DBroadcaster:
             ratio = self.frame_h / proportions[0]
             self.frame_h_half = self.frame_h // 2
             self.frame_w_half = int(proportions[-1] * ratio) // 2
+            self.streamer = Streamer(2 * self.frame_h_half, 2 * self.frame_w_half,
+                                     int(self.cap.get(cv2.CAP_PROP_FPS)))
+        else:
+            self.streamer = Streamer(self.win_h, self.win_w,
+                                     int(self.cap.get(cv2.CAP_PROP_FPS)))
 
         self.prev_face = Face()  # center of face
         # extreme frame points
@@ -111,7 +117,8 @@ class DBroadcaster:
             faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
             left_top, right_bottom = self.get_new_frame_points(faces, self.prev_left_top, self.prev_right_bottom)
             img = img[left_top.y:right_bottom.y, left_top.x:right_bottom.x]
-            cv2.imshow('video cropped', img)
+            # cv2.imshow('video cropped', img)
+            self.streamer.stream(img)
             # Wait for 'q' key to stop
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
@@ -125,7 +132,7 @@ class DBroadcaster:
         """
         if self.proportions is not None and len(faces) != 0:
             face = get_nearest_face(faces, self.prev_face)
-            alpha = 0.3 if self.move_cam else 0.6
+            alpha = 0.25 if self.move_cam else 0.6
 
             if is_same_faces(face, self.prev_face, self.frame_h_half, self.frame_w_half, alpha):
                 self.move_cam = False
@@ -154,7 +161,7 @@ class DBroadcaster:
         return left_top, right_bottom
 
     def move_center(self, face):
-        if self.move_cam and self.num_iter_step < 30:
+        if self.move_cam and self.num_iter_step < 25:
             self.num_iter_step += 1
             dx, dy = self.prev_dx, self.prev_dy
         else:
@@ -166,14 +173,5 @@ class DBroadcaster:
         return dx, dy
 
 
-# user_input = input("proportions (if they don't needs - use '-'): ")
-# if user_input == '-':
-#     props = None
-# else:
-#     props = list(map(int, user_input.split()))
-#     assert len(props) == 2, "proportions have only 2 arguments :0\n"
-
-print("please wait...")
 streamer = DBroadcaster(0, (3, 4), 0.7)
 streamer.broadcast_crop_video()
-print(":)")
