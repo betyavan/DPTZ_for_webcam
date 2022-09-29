@@ -1,6 +1,7 @@
 import cv2
 from math import sqrt
 from rtsp_streaming import Streamer
+from argparse import ArgumentParser
 
 
 class Point:
@@ -173,5 +174,18 @@ class DBroadcaster:
         return dx, dy
 
 
-streamer = DBroadcaster(0, (3, 4), 0.7)
-streamer.broadcast_crop_video()
+if __name__ == '__main__':
+    ap = ArgumentParser()
+    ap.add_argument("-p", "--props", required=False,
+                    help="proportions of streaming frame")
+    ap.add_argument("-k", "--koeff", required=False,
+                    help="the shape of window height, that used for evaluating proportions (KxL - format)")
+    ap.add_argument('-id', "--cam_id", required=False, help="id of streaming camera")
+    args = vars(ap.parse_args())
+
+    id = int(args["cam_id"]) if args["cam_id"] is not None else 0
+    props = (int(args["props"][0]), int(args["props"][-1])) if args["props"] is not None else None
+    koeff = float(args["koeff"]) if args["koeff"] is not None else 1
+
+    streamer = DBroadcaster(id, props, koeff)
+    streamer.broadcast_crop_video()

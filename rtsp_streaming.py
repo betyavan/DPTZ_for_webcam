@@ -15,7 +15,7 @@ class Streamer:
 
                    # You can change ffmpeg parameter after this item.
                    '-pix_fmt', 'yuv420p',
-                   '-r', '25',  # '30',  # output fps
+                   '-r', '60',  # '30',  # output fps
                    '-g', '250',  # '50'
                    '-keyint_min', '25', # !!!
                    '-c:v', 'libx264',
